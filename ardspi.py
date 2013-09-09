@@ -1,5 +1,3 @@
-# A robot script with keyboard and voice control using raspberry pi and atmega/adrunio.
-
 from quick2wire.spi import *
 from array import array
 import time
@@ -12,6 +10,20 @@ import sys, tty, termios
 from struct import unpack, pack
 
 import subprocess as sub  
+
+from threading import Thread
+import socket
+
+data = ''
+quit = False
+
+speedRight = 100
+speedLeft = 135
+
+forwardPos = 0
+backwardPos = 1
+leftPos = 2
+rightPos = 3
   
 def Run(cmd):  
     """ 
@@ -40,7 +52,7 @@ RATE = 16000
 def is_silent(L):
     "Returns `True` if below the 'silent' threshold"
     return max(L) < THRESHOLD
-    
+   
 def normalize(L):
     "Average the volume out"
     MAXIMUM = 16384
@@ -118,17 +130,73 @@ class GetCh:
  #       finally:
             #termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         return ch
-		
+
 def sendByte(spiDevice, byteToSend):
+    global speedRight
+    global speedLeft
+    send3Bytes(spiDevice, byteToSend, speedRight, speedLeft)
+    return
+		
+def send3Bytes(spiDevice, byteToSend1, byteToSend2, byteToSend3):
     #print "sending", byteToSend, "\r"
-    reply = ard.transaction( writing(bytearray([byteToSend])) )
+    out = bytearray(4)
+    indata = bytearray(4)
+    out[0] = byteToSend1
+    out[1] = byteToSend2
+    out[2] = byteToSend3;
+    out[3] = 0;
+    #out[2] = 16
+    #out[3] = 15
+    #out = bytes(bytearray([byteToSend1, byteToSend2]))
+    out = bytes(out)
+    print "length %d \r" % len(out)
+    p = create_string_buffer(out, len(out))
+    print sizeof(p), repr(p.raw)
+    #print bytes(out)
+    reply = ard.transaction( duplex(out))
+    #reply = ard.transaction( writing(out))
+    #reply = ard.transaction( writing(bytearray([byteToSend1])) )
+    #reply = ard.transaction( writing(bytearray([byteToSend2])) )
+    
+    #print reply
+    #print ord(reply[0][1])+(ord(reply[0][2])<<8)
+    print "Voltage %f" % (((float)(ord(reply[0][1])+(ord(reply[0][2])<<8)))/1024*3.3)
     print "\r"
     time.sleep(0.01)
     return
 
+def networkfunc(mystring,*args):
+    global data 
+    global quit
+    print mystring
+
+    host = '192.168.178.21'
+    port = 50000
+    size = 4
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    print "socket created"
+    s.connect((host,port))
+    print "connected"
+    #s.send('Hello, world')
+
+    while not quit:
+        #print "recieving"
+        data = s.recv(4)
+        #print type(data)
+        print "recv %d\n" % size
+	print data
+        time.sleep(0.01)
+
+try:
+    Thread(target=networkfunc, args=('MyStringHere',1)).start()
+except Exception, errtxt:
+    print errtxt
+
 ard = SPIDevice(0, 0)
+print "org speed %d " % ard.speed_hz
 ard.clock_mode = 1
-ard.speed_hz = 500000
+# Set to 250000, default speed for arduino
+ard.speed_hz = 4000
 ard.delay = 0
 mode = 1
 print "mode: ", mode, "\n"
@@ -142,15 +210,14 @@ rightForwards = 3;
 rightBackwards = 2;
 leftStop = 15;
 rightStop = 16;
-quit = False
 
-p = pyaudio.PyAudio()
+#p = pyaudio.PyAudio()
 print "pyAudio on\r"
-stream = p.open(format=FORMAT, channels=1, rate=RATE, 
-                input=True, 
-                output=True,
-                frames_per_buffer=CHUNK_SIZE)
-sample_width = p.get_sample_size(FORMAT)
+#stream = p.open(format=FORMAT, channels=1, rate=RATE, 
+#                input=True, 
+#                output=True,
+#                frames_per_buffer=CHUNK_SIZE)
+#sample_width = p.get_sample_size(FORMAT)
 num_silent = 0
 num_since_start = 0
 snd_started = False
@@ -178,11 +245,35 @@ try:
             if speechkey != 0:
                 print "Speech key received ", key, "\r"
             speechkey = 0
+
+        if key == 0 and (data):
+            #print "datastr %s\n" % data
+            if (ord(data[forwardPos])):
+                print ("forward %d\r" % ord(data[forwardPos]))
+            elif (ord(data[backwardPos])):
+                print ("backward %d\r" % ord(data[backwardPos]))
+            elif (ord(data[leftPos])):
+                print ("left %d\r" % ord(data[leftPos]))
+                sendByte(ard, rightBackwards)
+                sendByte(ard, leftForwards)
+                key = 0
+            elif (ord(data[rightPos])):
+                print ("right %d\r" % ord(data[rightPos]))
+                sendByte(ard, leftBackwards)
+                sendByte(ard, rightForwards)
+		key = 0
+            else:
+                print("stop\r")
+                sendByte(ard, leftStop)
+                sendByte(ard, rightStop)
+        
+#        data = ''
         reply = 0;
         bytesToSend = 0
         #time.sleep(0.1)
         if key == 'q':
             quit = True
+            sys.exit()
         elif key == 'w':
             sendByte(ard, rightForwards)
             sendByte(ard, leftForwards)
@@ -200,7 +291,7 @@ try:
             sendByte(ard, leftStop)		
             #reply = ard.transaction( duplex_bytes( 1 , ( ( 8 + 1 ) << 4 ) , 0 ) )
             #print ( reply, "\n" )
-        else:
+        elif key == '+':
             #try record some data
             try:
                 data = stream.read(CHUNK_SIZE)
@@ -221,7 +312,7 @@ try:
             #print silent, num_silent, L[:10]
             
             if silent and snd_started:
-                print "silent\r"
+                #print "silent\r"
                 num_silent += 1
             elif not silent and not snd_started:
                 print "found something\r" 
@@ -233,17 +324,28 @@ try:
             else:
                 num_since_start += 1
                 
-            if snd_started and (num_silent > 10 or num_since_start  > 20) :
+            if False and snd_started and (num_silent > 10 or num_since_start  > 20) :
+                trimStart = time.time()
                 stream.stop_stream()
                 #LRtn = normalize(LRtn)
                 print "savelen ",len(LRtn), "\r"
-                LRtn = trim(LRtn)
+                
+                #LRtn = trim(LRtn)
+                trimEnd = time.time()
                 print "savelen ",len(LRtn), "\r"
                 LRtn = add_silence(LRtn, 0.5)
+                silenceEnd = time.time()
                 record_to_file('demo.wav', sample_width, LRtn)
+                fileEnd = time.time()
                 #res = Run("flac demo.wav -f --best --sample-rate 16000 -o out.flac; wget -O - -o /dev/null --post-file out.flac --header=\"Content-Type: audio/x-flac; rate=16000\" http://www.google.com/speech-api/v1/recognize?lang=pt-BR | sed -e 's/[{}]/''/g'| awk -v k=\"text\" '{n=split($0,a,\",\"); for (i=1; i<=n; i++) print a[i]; exit }' | awk -F: 'NR==3 { print $3; exit }'")
-                res = Run("flac demo.wav -f --best --sample-rate 16000 -o out.flac; wget -O - -o /dev/null --post-file out.flac --header=\"Content-Type: audio/x-flac; rate=16000\" http://www.google.com/speech-api/v1/recognize?lang=en-US | sed -e 's/[{}]/''/g'| awk -v k=\"text\" '{n=split($0,a,\",\"); for (i=1; i<=n; i++) print a[i]; exit }' | awk -F: 'NR==3 { print $3; exit }'")
-                
+				#res = Run("flac demo.wav -f --best --sample-rate 16000 -o out.flac; wget -O - -o /dev/null --post-file out.flac --header=\"Content-Type: audio/x-flac; rate=16000\" http://www.google.com/speech-api/v1/recognize?lang=en-US | sed -e 's/[{}]/''/g'| awk -v k=\"text\" '{n=split($0,a,\",\"); for (i=1; i<=n; i++) print a[i]; exit }' | awk -F: 'NR==3 { print $3; exit }'")
+                res = Run("flac demo.wav -f --best --sample-rate 16000 -o out.flac;")
+                flacEnd = time.time()
+                res = Run("wget -O - -o /dev/null --post-file out.flac --header=\"Content-Type: audio/x-flac; rate=16000\" http://www.google.com/speech-api/v1/recognize?lang=en-US | sed -e 's/[{}]/''/g'| awk -v k=\"text\" '{n=split($0,a,\",\"); for (i=1; i<=n; i++) print a[i]; exit }' | awk -F: 'NR==3 { print $3; exit }'");
+                runEnd = time.time()
+
+                print ("trimT %f silenceT %f fileT %f flacT %f runT %f total %f" % (trimEnd-trimStart,silenceEnd-trimEnd,fileEnd-silenceEnd,flacEnd - fileEnd,runEnd-flacEnd,runEnd-trimStart))
+				
                 #print Run('ls')
                 #fmt         = audiolab.Format('flac', 'pcm16')
                 #nchannels   = 1

@@ -4,11 +4,12 @@
  */
 #include <SPI.h>
  
-// Pin 13 has an LED connected on most Arduino boards.
-// give it a name:
-int led = 8;
-volatile boolean readTemp = true;
-volatile byte readByte = 0;
+const byte SETTING_DBG_OUT = 0x1;
+
+// Readbyte 0 is the direction or action, readbyte 1+2 are the right and left
+// speed
+volatile byte readBytes[4] = {0, 255, 255, SETTING_DBG_OUT};
+volatile byte writeBytes[4] = {0, 0, 0, 0};
 byte clr;
 int intCount = 0;
 const int leftEnable = 5;
@@ -19,6 +20,11 @@ const int rightForwards = 3;
 const int rightBackwards = 2;
 const int leftStop = 15;
 const int rightStop = 16;
+const int spiBufLen = 4;
+byte speedLoop=0;
+byte rightOn = 0;
+byte leftOn = 0;
+byte toggleOn = 1;
 
 void enableRightForwards()
 {
@@ -26,6 +32,7 @@ void enableRightForwards()
   digitalWrite(rightBackwards, LOW);
   digitalWrite(rightForwards, HIGH);
   digitalWrite(rightEnable, HIGH);
+  rightOn = 1;
   Serial.println("enableRightForwards");
 }
 
@@ -35,6 +42,7 @@ void enableRightBackwards()
   digitalWrite(rightBackwards, HIGH);
   digitalWrite(rightForwards, LOW);
   digitalWrite(rightEnable, HIGH);
+  rightOn = 1;
   Serial.println("enableRightBackwards");
 }
 
@@ -44,6 +52,7 @@ void enableLeftForwards()
   digitalWrite(leftBackwards, LOW);
   digitalWrite(leftForwards, HIGH);
   digitalWrite(leftEnable, HIGH);
+  leftOn = 1;
   Serial.println("enableLeftForwards");
 }
 
@@ -53,17 +62,20 @@ void enableLeftBackwards()
   digitalWrite(leftBackwards, HIGH);
   digitalWrite(leftForwards, LOW);
   digitalWrite(leftEnable, HIGH);
+  leftOn = 1;
   Serial.println("enableLeftBackwards");
 }
 
 void disableRight()
 {
   digitalWrite(leftEnable, LOW);
+  rightOn = 0;
   Serial.println("disableRight");
 }
 void disableLeft()
 {
   digitalWrite(rightEnable, LOW);
+  leftOn = 0;
   Serial.println("disableLeft");
 }
 
@@ -94,45 +106,66 @@ void setup() {
   
 }
 
-
 ISR (SPI_STC_vect)
 {
-  readByte = SPDR;  // grab byte from SPI Data Register
-  //Serial.print("Interrupt. ");
-  //Serial.print(readByte);
-  //Serial.println(" ");
-  // add to buffer if room
-  //if (readByte == 0x5)
-  {
-    readTemp = !readTemp;  
-      
-  }  // end of room available
+  // We need to setup the next byte to be read
+  SPDR = (byte)writeBytes[(intCount+1) % spiBufLen];
   
-  
- 
-  //readByte = 0;
+  readBytes[intCount % spiBufLen] = SPDR;  // grab byte from SPI Data Register
   intCount++;
-  //readTemp = false;
 }  // end of interrupt routine SPI_STC_vect
 
-// the loop routine runs over and over again forever:
-void loop() {
+// the loop routine runs over and ovier again forever:
+void loop() 
+{
   int V0;
-  int ThermistorPin = 3; // Analog input pin for thermistor voltage
+  const int ThermistorPin = 3; // Analog input pin for thermistor voltage
+  const int VoltageMonitor = 2; // Analog input pin for thermistor voltage
   int Vo; // Integer value of voltage reading
   float R = 4000.0; // Fixed resistance in the voltage divider
   float logRt,Rt,T;
   float c1 = 1.009249522e-03, c2 = 2.378405444e-04, c3 = 2.019202697e-07;
-  Vo = analogRead(ThermistorPin);
+  Vo = analogRead(VoltageMonitor);
+  
+  writeBytes[1] = Vo&0xff;
+  writeBytes[2] = (Vo>>8)&0xff;
 
-  //Rt = R*( 1023.0 / (float)Vo - 1.0 );
-  //logRt = log(Rt);
-  //T = ( 1.0 / (c1 + c2*logRt + c3*logRt*logRt*logRt ) ) - 273.15;
+  if (speedLoop < readBytes[1])
+  {
+    // enable outputs
+    if (rightOn)
+    {
+      digitalWrite(rightEnable, HIGH);
+    }
+    else
+    {
+      digitalWrite(rightEnable, LOW);
+    }
+  }
+  else
+  {
+    digitalWrite(rightEnable, LOW);
+  }
   
-  //digitalWrUite(led, HIGH);   // turn the LED on (HIGH is the voltage level)
-  //enableLeftBackwards();
+  if (speedLoop < readBytes[2])
+  {
+    if (leftOn)
+    {
+      digitalWrite(leftEnable, HIGH);
+    }
+    else
+    {
+      digitalWrite(leftEnable, LOW);
+    }
+  } 
+  else
+  {
+    digitalWrite(leftEnable, LOW);
+  }
   
-  switch(readByte)
+  speedLoop++;
+  
+  switch(readBytes[0])
   {
     case leftForwards:
       enableLeftForwards();
@@ -153,30 +186,32 @@ void loop() {
       disableLeft();
       break;
   }
-  readByte = 0;
   
   now=millis();
-  //delay(100);               // wait for a second
-  //if (readTemp) 
-  //  Serial.print("interrupt called ");
-   
-  if (now - lastprint > 500)
+  
+  // Debug output, we don't want to do this to often because
+  // its slow
+  if ((readBytes[3] & SETTING_DBG_OUT) &&
+      (now - lastprint > 500))
   {
     Serial.print(Vo);
     Serial.print(" spcr ");
     Serial.print(SPCR, BIN);
-    Serial.print(" spsr ");     
-    Serial.print(SPSR, BIN);
+    //Serial.print(" spsr ");     
+    //Serial.print(SPSR, BIN);
     Serial.print(" readByte "); 
-    Serial.print(readByte);
+    Serial.print(readBytes[0]);
     Serial.print(" intC ");
-    Serial.print(intCount); 
+    Serial.print(intCount);
+    Serial.print(" speed "); 
+    Serial.print(readBytes[1]);
+    //Serial.print(" wb0 ");
+    //Serial.print(writeBytes[1]);
+    //Serial.print(" wb1 ");
+    //Serial.print(writeBytes[2]);
     Serial.println(" ");
     lastprint = now;    
   }
   
-
-  //
-  //digitalWrite(led, LOW);    // turn the LED off by making the voltage LOW
-  //delay(100);               // wait for a second
+  readBytes[0] = 0;
 }
