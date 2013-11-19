@@ -1,0 +1,10 @@
+A rasberry pi based robot using OpenCV
+
+Does things like:
+1.) Object detection using ORB/SURF to find your coffee
+2.) GPU HW H264 decoding
+3.) Live stereo camera
+4.) Stereo block matching and image rectifcation (requires help from external app for 
+      rectification maps)
+
+For more details goto http://subgroup-ash.blogspot.com/
