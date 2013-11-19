@@ -29,6 +29,9 @@ DWORD WINAPI serverListenProc(void *params);
 static char *vid_server = "ashpi.fritz.box";
 
 // Running raspivid:
-// raspivid -ss 5500 -t 999999 -b 2000000 -w 1920 -h 1080 -o - | nc -l -p 8080 
+// You can't push the bit rate up too high because then the
+// frames can't get transported over wifi fast enough. I don' tknow if
+// a wired network would give better results
+// raspivid -ss 5500 -t 0 -b 2000000 -w 1920 -h 1080 -o - | nc -l -p 8080 
 
 

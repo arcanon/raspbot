@@ -1,5 +1,7 @@
 #include "stream.h"
 
+using namespace cv;
+
 VideoStream::VideoStream(SourceType sourceType, std::string fname) :
  m_fname(fname),
  m_sourceType(sourceType),
@@ -38,6 +40,12 @@ VideoStream::VideoStream(SourceType sourceType, std::string fname) :
 
 bool VideoStream::readLatestFrame()
 {
+    if (!m_h264source.isStarted())
+    {
+        assert(0);
+        return false;
+    }
+
      switch (g_source)
     {
         case SOCKETIN:
@@ -94,5 +102,57 @@ bool VideoStream::readLatestFrame()
     return true;
 }
 
+bool VideoStream::setRectifyMaps(std::string mapxFileName, std::string mapyFileName)
+{
+    // TODO: update to the new c++ file writing system
+    //FileStorage fs(mapxFileName.c_str(), FileStorage::READ);
+    //cv::Mat mx;
+    //mx <<
+    //new cv::Mat(
+    CvMat * mxtmp = (CvMat*)cvLoad(mapxFileName.c_str());
+    CvMat *mytmp = (CvMat*)cvLoad(mapyFileName.c_str());
+
+    cv::Mat mx(mxtmp->rows, mxtmp->cols, mxtmp->type, mxtmp->data.fl);
+
+    cv::Mat my(mytmp->rows, mytmp->cols, mytmp->type, mytmp->data.fl);
+
+    //mx = new cv::Mat(*mxtmp);
+
+    //gmx = new gpu::GpuMat(mxtmp->rows, mxtmp->cols, mytmp->type);
+    //gpu::GpuMat d_m = createMat(m.size(), m.type(), useRoi);
+    gmx.upload(mx);
+    gmy.upload(my);
+
+    return true;
+}
+
+bool VideoStream::bilatralFilter()
+{
+    cv::gpu::GpuMat tmp;
+    cv::gpu::bilateralFilter(m_gCurrentFrameGray, tmp,30,24,6.5);
+    m_gCurrentFrameGray = tmp;
+    return true;
+}
+
+bool VideoStream::rectifyCurrentFrame()
+{
+    gpu::remap(m_gCurrentFrameGray, m_gCurrentFrameGrayRectified, gmx, gmy,INTER_LINEAR);
+    return true;
+}
+
+bool VideoStream::saveLatestFrame(std::string saveFileName)
+{
+    Mat tmp(m_gCurrentFrame.rows, m_gCurrentFrame.cols, m_gCurrentFrame.type());
+
+    m_gCurrentFrame.download(tmp);
+
+    return imwrite(saveFileName.c_str(), tmp);
+}
+
+
+void VideoStream::normalize()
+{
+    gpu::normalize(m_gCurrentFrameGray, m_gCurrentFrameGray);
+}
 
 

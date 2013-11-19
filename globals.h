@@ -10,6 +10,8 @@ enum SourceType {
 // global shared variables
 extern SourceType g_source;
 extern bool       g_paused;
+extern bool g_rectify;
+extern bool g_sleep;
 extern bool g_stepOne;
 extern bool g_detectKeyPoints;
 extern bool g_useSurf;
@@ -17,6 +19,22 @@ extern bool g_useFilter;
 extern bool g_useCPU;
 extern bool g_displayStereoWindow;
 extern bool g_skipProcessing;
+extern int  g_bThreshold;
+#define BM_THRESHOLD_MAX 1000
+
+// Stereo constants
+
+enum StereoMatchMethod 
+{
+    BM = 0,
+    BP = 1,
+    CSBP = 2
+};
+extern StereoMatchMethod  g_stereo;
+extern int  g_ndispMax;
+extern int  g_bmWinSize;
+extern int  g_BPiters;
+extern int  g_BPLevels;
 
 // Key command definitions
 #define forwardPos 0

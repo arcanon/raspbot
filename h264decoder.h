@@ -14,11 +14,14 @@ public:
     HANDLE inputThread;
     std::string m_vid_server;
 
+    SOCKET ConnectSocket;
+
 
     H264StreamSource(std::string serverAddr) :
       inputThread(NULL),
       started(false),
-      m_vid_server(serverAddr)
+      m_vid_server(serverAddr),
+      ConnectSocket(INVALID_SOCKET)
       {}
     ~H264StreamSource() {}
 
@@ -84,7 +87,7 @@ public:
                 WSACleanup();
                 return 1;
             }
-            SOCKET ConnectSocket = INVALID_SOCKET;
+            ConnectSocket = INVALID_SOCKET;
 
             // Attempt to connect to the first address returned by
             // the call to getaddrinfo
@@ -117,6 +120,8 @@ public:
             // This loop would allow you to discard data and read up to the newest to
             // reduce latency, but then you get decomposition artefacts. Instead
             // later we decompose the frames as fast as possible later
+
+            started = true;
             do {
                 while (iResult == blockSize) {
                     iResult = recv(ConnectSocket, (char *)dataNew, blockSize, 0);
@@ -166,7 +171,11 @@ public:
 
                 // start again to recv if possible
                 iResult = blockSize;
-                //Sleep(1);
+
+                if (g_sleep)
+                {
+                    Sleep(10);
+                }
 
             } while( 1 );
 
@@ -182,7 +191,6 @@ public:
 
     void start()  {
         inputThread = CreateThread(NULL, 0, readThread, this, 0, NULL);
-        started = true;
     }
     void stop()  {
         //kill thread

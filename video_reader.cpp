@@ -22,6 +22,7 @@
 #include "networkConnection.h"
 #include "h264decoder.h"
 #include "stream.h"
+#include "stereo.h"
 
 using namespace cv;
 using namespace cv::gpu;
@@ -40,7 +41,8 @@ enum ButtonTypes {
     CPU_BUTTON,
     SURF_BUTTON,
     DETECT_BUTTON,
-    FILTER_BUTTON
+    FILTER_BUTTON,
+    RECTIFY_BUTTON
 };
 
 // various settings
@@ -53,6 +55,9 @@ int homoUniqueDist = 7;
 int nbMatchCount = 20;
 int ransacError = 5;
 
+VideoStream *g_lefteyeStream = NULL;
+VideoStream *g_righteyeStream = NULL;
+
 class MyInit 
 {
     
@@ -63,6 +68,7 @@ public:
         cv::namedWindow("CPU", cv::WINDOW_NORMAL);
         resizeWindow("CPU",800,600);
         cv::createButton("pause",(cv::ButtonCallback)buttonFunc, (void *) PAUSE_BUTTON,QT_CHECKBOX,0);
+        cv::createButton("rectify",(cv::ButtonCallback)buttonFunc, (void *) RECTIFY_BUTTON,QT_CHECKBOX,g_rectify);
         cv::createButton("key point",(cv::ButtonCallback)buttonFunc, (void *) KEYPOINT_BUTTON,QT_CHECKBOX,0);
         cv::createButton("surf",(cv::ButtonCallback)buttonFunc, (void *) SURF_BUTTON,QT_CHECKBOX,g_useSurf);
         cv::createButton("cpu",(cv::ButtonCallback)buttonFunc, (void *) CPU_BUTTON,QT_CHECKBOX,g_useCPU);
@@ -70,6 +76,7 @@ public:
         cv::createButton("restart",(cv::ButtonCallback)buttonFunc, (void *) RESTART_BUTTON,QT_PUSH_BUTTON,0);
         cv::createButton("stepone",(cv::ButtonCallback)buttonFunc, (void *) STEPONE_BUTTON,QT_PUSH_BUTTON,0);
         cv::createButton("savedetect",(cv::ButtonCallback)buttonFunc, (void *) DETECT_BUTTON,QT_PUSH_BUTTON,0);
+
 
         cv::createTrackbar("r-lower",NULL,&bounds[0][0],255);
         cv::createTrackbar("r-lower",NULL,&bounds[0][0],255);
@@ -86,7 +93,13 @@ public:
         cv::createTrackbar("homoUniqueDist",NULL,&homoUniqueDist,100);
         cv::createTrackbar("ransacError",NULL,&ransacError,50);
         cv::createTrackbar("histSize",NULL,&g_histSize,DESC_MAX_HIST);
-
+        cv::createTrackbar("ndispmax",NULL,&g_ndispMax,255);
+        cv::createTrackbar("bmwinsize",NULL,&g_bmWinSize,52);
+        cv::createTrackbar("stereomethod",NULL,(int *)&g_stereo,2);
+        cv::createTrackbar("bpiterations",NULL,(int *)&g_BPiters,50);
+        cv::createTrackbar("bplevels",NULL,(int *)&g_BPLevels,50);
+        cv::createTrackbar("threshold",NULL,(int *)&g_bThreshold,BM_THRESHOLD_MAX);
+        
         //cv::createB
         cv::namedWindow("GPU", cv::WINDOW_OPENGL);
         cv::gpu::setGlDevice();
@@ -149,6 +162,8 @@ void updateDescriptors()
     matches.clear();
 }
 
+static int saveCount = 0;
+
  void *buttonFunc(int state, void* userdata)
  {
     ButtonTypes type = (ButtonTypes) (int)userdata; 
@@ -174,6 +189,8 @@ void updateDescriptors()
     case PAUSE_BUTTON:
         g_paused = !!state;
         break;
+    case RECTIFY_BUTTON:
+        g_rectify = !!state;
     case KEYPOINT_BUTTON:
         g_detectKeyPoints = !!state;
         break;
@@ -211,7 +228,7 @@ void updateDescriptors()
     case DETECT_BUTTON:
         {
             cv::gpu::GpuMat d_frame;
-            switch (g_source)
+            /*switch (g_source)
             {
             case SOCKETIN:
             case STDIN:
@@ -261,7 +278,21 @@ void updateDescriptors()
                 orbGpu.downloadKeyPoints(gpuDetectKeyPoints, detectKeyPoints);
 
                 orbCPU(srcGray, cpuMaskFrame, cpuDetectKeyPoints, OutputArray(cpuDetectDescriptors));
+            }*/
+
+            char saveName[100];
+            if(g_lefteyeStream)
+            {
+                sprintf(saveName, "E:/camera_egs/raspi-stereo/imageleft%d.jpg", saveCount);
+                g_lefteyeStream->saveLatestFrame(saveName);
             }
+
+            if (g_righteyeStream)
+            {
+                sprintf(saveName, "E:/camera_egs/raspi-stereo/imageright%d.jpg", saveCount);
+                g_righteyeStream->saveLatestFrame(saveName);
+            }
+            saveCount++;
             break;
         }
     }
@@ -620,8 +651,14 @@ int main(int argc, const char* argv[])
     resizeWindow("CPU",800,600);
     Sleep(50);
     VideoStream leftEyeStream(g_source, "ashpi2.fritz.box");
+    g_lefteyeStream = &leftEyeStream;
     Sleep(50);
     VideoStream rightEyeStream(g_source, "ashpi.fritz.box");//"E:\\camera_egs\\video2.h264");
+    g_righteyeStream = &rightEyeStream;
+
+    //set rectify matrices
+    leftEyeStream.setRectifyMaps("E:\\camera_egs\\stereo_camera_calibrate\\mx1.xml", "E:\\camera_egs\\stereo_camera_calibrate\\my1.xml");
+    rightEyeStream.setRectifyMaps("E:\\camera_egs\\stereo_camera_calibrate\\mx2.xml", "E:\\camera_egs\\stereo_camera_calibrate\\my2.xml");
 
     // Transform from int to char via Bitwise operators
     //char EXT[] = {(char)(ex & 0XFF) , (char)((ex & 0XFF00) >> 8),(char)((ex & 0XFF0000) >> 16),(char)((ex & 0XFF000000) >> 24), 0};
@@ -629,7 +666,7 @@ int main(int argc, const char* argv[])
     // CV_FOURCC('P','I','M','1')
     bool res = outputVideo.open("e:\\camera_egs\\stereo.avi", CV_FOURCC('m', 'p', '4', 'v'),25,cv::Size(1920,1088));
     assert(res);
-    switch (g_source)
+    /*switch (g_source)
     {
         case SOCKETIN:
         case STDIN:
@@ -657,7 +694,7 @@ int main(int argc, const char* argv[])
 
     if (d_reader) {
         d_reader->dumpFormat(std::cout);
-    }
+    }*/
 
     //src = cv::imread("e:\\camera_egs\\lampref2.png");
     src = cv::imread("e:\\camera_egs\\detect.png");
@@ -688,6 +725,10 @@ int main(int argc, const char* argv[])
 
         orbCPU(srcGray, cpuMaskFrame, cpuDetectKeyPoints, OutputArray(cpuDetectDescriptors));
     }
+
+    gpu::GpuMat d_disp;
+
+    StereoMatching strCtl;
 
     for (;;)
     {
@@ -746,21 +787,75 @@ int main(int argc, const char* argv[])
             //    }
             //}
             leftEyeStream.readLatestFrame();
+            
             rightEyeStream.readLatestFrame();
-            finalFrame = cv::gpu::GpuMat(leftEyeStream.m_gCurrentFrameGray.rows, leftEyeStream.m_gCurrentFrameGray.cols, CV_8UC4);
-            anaglyph(leftEyeStream.m_gCurrentFrameGray, rightEyeStream.m_gCurrentFrameGray,finalFrame);
-            /*
-            combine left and right into one window
 
-            finalFrame = cv::gpu::GpuMat(leftEyeStream.m_gCurrentFrameGray.rows, leftEyeStream.m_gCurrentFrameGray.cols*2, CV_8U);
+            if (g_rectify) 
+            {
+                leftEyeStream.rectifyCurrentFrame();
+                rightEyeStream.rectifyCurrentFrame();
+            }
 
-            cv::gpu::GpuMat subKeyFrame = finalFrame(Rect(0, 0,leftEyeStream.m_gCurrentFrameGray.cols, leftEyeStream.m_gCurrentFrameGray.rows));
+            //finalFrame = cv::gpu::GpuMat(leftEyeStream.m_gCurrentFrameGray.rows, leftEyeStream.m_gCurrentFrameGray.cols, CV_8UC4);
+            //anaglyph(leftEyeStream.m_gCurrentFrameGray, rightEyeStream.m_gCurrentFrameGray,finalFrame);
+
+           // gpu::remap(leftEyeStream.m_cCurrentFrameGray,
+
+            if (g_useFilter)
+            {
+                leftEyeStream.bilatralFilter();
+                rightEyeStream.bilatralFilter();
+            }
+
+            switch (g_stereo)
+            {
+            case BM:
+                {
+                    /*if (leftEyeStream.m_gCurrentFrameGray.size() != d_disp.size())
+                    {
+                        d_disp.create(leftEyeStream.m_gCurrentFrameGray.size(), CV_8U);
+                    }*/
+                    strCtl.getDisparityMapBM(leftEyeStream.m_gCurrentFrameGrayRectified, 
+                                             rightEyeStream.m_gCurrentFrameGrayRectified,
+                                             d_disp);
+                   /* cv::gpu::GpuMat tmp;
+                    gpu::normalize(d_disp, tmp, 255);
+                    d_disp = tmp;*/
+                    break;
+                }
+            case BP:
+                strCtl.getDisparityMapBP(leftEyeStream.m_gCurrentFrameGray, rightEyeStream.m_gCurrentFrameGray, d_disp);
+                break;
+            case CSBP:
+                strCtl.getDisparityMapCSBP(leftEyeStream.m_gCurrentFrameGray, rightEyeStream.m_gCurrentFrameGray, d_disp);
+                break;
+            default:
+                assert(0);
+            }
+
+            //combine left and right into one window  
+            // this section of code drops the code to 14fps
+            const int frameCols = leftEyeStream.m_gCurrentFrameGray.cols;
+            const int frameRows = leftEyeStream.m_gCurrentFrameGray.rows;
+            if (finalFrame.size() != cv::Size(frameCols*2, frameRows*2))
+            {
+                finalFrame = cv::gpu::GpuMat(frameRows*2, frameCols*2, CV_8U, cv::Scalar(0));
+            }
+
+            cv::gpu::GpuMat subKeyFrame = finalFrame(Rect(0, 0,frameCols, frameRows));
 
             leftEyeStream.m_gCurrentFrameGray.copyTo(subKeyFrame);
 
-            subKeyFrame = finalFrame(Rect(leftEyeStream.m_gCurrentFrameGray.cols, 0,leftEyeStream.m_gCurrentFrameGray.cols, leftEyeStream.m_gCurrentFrameGray.rows));
+            subKeyFrame = finalFrame(Rect(frameCols, 0,frameCols, frameRows));
 
-            rightEyeStream.m_gCurrentFrameGray.copyTo(subKeyFrame);*/
+            rightEyeStream.m_gCurrentFrameGray.copyTo(subKeyFrame);
+
+            subKeyFrame = finalFrame(Rect(0, frameRows,frameCols, frameRows));
+
+            d_disp.copyTo(subKeyFrame);
+            
+            //End left and right composition
+            
 
             //cv::gpu::resize(d_frame, d_frame2,cv::Size(512,512));
             //cv::gpu::cvtColor(d_frame2, d_frame, (g_source == WEBCAM ? CV_RGB2GRAY : CV_RGBA2GRAY));
@@ -775,15 +870,14 @@ int main(int argc, const char* argv[])
                 finalFrame = d_frame;
             }*/
 
-            //finalFrame = 
-            //leftEyeStream.m_gCurrentFrameGray.
+            //finalFrame = leftEyeStream.m_gCurrentFrameGray;
 
-            finalFrame.download(frame);
+            //finalFrame.download(frame);
 
             //outputVideo << frame;
             //outputVideo.write(frame);
 
-            drawFrame = frame;
+            //drawFrame = frame;
         }
 
         if (!g_skipProcessing)
@@ -841,7 +935,10 @@ int main(int argc, const char* argv[])
         //if (cv::waitKey(3) > 0)
             //break;
 
-        //Sleep(10);
+        if (g_sleep)
+        {
+            Sleep(10);
+        }
     }
 
     if (!cpu_times.empty() && !gpu_times.empty())

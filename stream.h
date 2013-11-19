@@ -17,7 +17,7 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/contrib/contrib.hpp>
 #include <opencv2\imgproc\types_c.h>
-#include <opencv2/nonfree/gpu.hpp>
+    
 #include <opencv2/nonfree/nonfree.hpp>
 #include "h264decoder.h"
 
@@ -47,8 +47,25 @@ public:
     cv::gpu::GpuMat m_gCurrentFrameGray;
     cv::Mat         m_cCurrentFrameGray;
 
+    // Rectifying matrices
+    //cv::Mat *mx, *my;
+    cv::gpu::GpuMat gmx, gmy;
+
+    // Rectified buffers
+    cv::gpu::GpuMat m_gCurrentFrameGrayRectified;
+
     VideoStream(SourceType source, std::string fname);
 
     bool readLatestFrame();
+
+    bool rectifyCurrentFrame();
+
+    bool bilatralFilter();
+
+    void normalize();
+
+    bool saveLatestFrame(std::string saveFileName);
+
+    bool setRectifyMaps(std::string mapxFileName, std::string mapyFileName);
 };
 
