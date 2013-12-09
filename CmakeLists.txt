@@ -1,0 +1,44 @@
+cmake_minimum_required(VERSION 2.6)
+project("raspbot")
+
+string(TOLOWER ${PROJECT_NAME} LIBRARY_NAME)
+
+option(BUILD_SHARED_LIBS "Build Shared Library" OFF)
+
+FIND_PACKAGE(OpenCV REQUIRED)
+LIST(APPEND INCLUDE_DIRS ${OpenCV_INCLUDE_DIRS})
+LIST(APPEND LIBS ${OpenCV_LIBS})
+
+file(GLOB HEADER_FILES
+    "*.h"
+)
+
+file(GLOB SOURCES
+    "*.cpp"
+    "*.cu"
+)
+
+find_package(CUDA)
+LIST(APPEND LIBS ${CUDA_nvcuvid_LIBRARY})
+LIST(APPEND LIBS ${CUDA_CUDA_LIBRARY})
+
+#nvcc flags
+set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS};-gencode arch=compute_20,code=sm_20)
+
+message(STATUS ${SOURCES})
+
+INCLUDE_DIRECTORIES(${INCLUDE_DIRS})
+CUDA_ADD_LIBRARY(${LIBRARY_NAME} STATIC ${SOURCES} ${HEADER_FILES})
+
+CUDA_ADD_EXECUTABLE(${LIBRARY_NAME}run ${SOURCES} ${HEADER_FILES})
+target_link_libraries(${LIBRARY_NAME}run ${LIBS})
+
+install(FILES ${HEADER_FILES}
+    DESTINATION ${CMAKE_INSTALL_PREFIX}/include)
+    
+install(TARGETS ${LIBRARY_NAME} ${LIBRARY_NAME}run
+  RUNTIME DESTINATION bin
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  )
+    
