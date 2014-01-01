@@ -20,6 +20,7 @@ extern bool g_useCPU;
 extern bool g_displayStereoWindow;
 extern bool g_skipProcessing;
 extern int  g_bThreshold;
+extern bool g_showLeft;
 #define BM_THRESHOLD_MAX 1000
 
 // Stereo constants

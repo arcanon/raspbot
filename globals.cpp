@@ -2,7 +2,7 @@
 
 SourceType g_source = SOCKETIN;
 bool g_paused = false;
-bool g_rectify = true;
+bool g_rectify = false;
 bool g_stepOne = false;
 bool g_detectKeyPoints = false;
 bool g_useSurf = false;
@@ -10,7 +10,8 @@ bool g_useFilter = false;
 bool g_useCPU = false;
 bool g_displayStereoWindow = true;
 bool g_skipProcessing = true;
-bool g_sleep = true;
+bool g_sleep = false;
+bool g_showLeft = false;
 
 // right now anything besides my 
 StereoMatchMethod  g_stereo = BM;

@@ -1,6 +1,7 @@
 #undef UNICODE
 
 #define WIN32_LEAN_AND_MEAN
+// #define OBJECT_DETECT
 
 #include <iostream>
 #include <string>
@@ -9,6 +10,8 @@
 #include <numeric>
 #include <Windows.h>
 
+#include <cuda_gl_interop.h>
+#include <cuda_runtime_api.h>
 #include <opencv2/core/core.hpp>
 #include <opencv2/calib3d/calib3d.hpp>
 #include <opencv2/core/opengl.hpp>
@@ -23,6 +26,11 @@
 #include "h264decoder.h"
 #include "stream.h"
 #include "stereo.h"
+#include "C:/Users/areid/Documents/GitHub/VisionTools/visiontools/stopwatch.h"
+#if defined(_WINDOWS)
+LARGE_INTEGER VisionTools::StopWatch::perfFreq;
+#endif
+//#include "e:/GitHub/opencv/modules/gpu/src/frame_queue.h"
 
 using namespace cv;
 using namespace cv::gpu;
@@ -42,7 +50,8 @@ enum ButtonTypes {
     SURF_BUTTON,
     DETECT_BUTTON,
     FILTER_BUTTON,
-    RECTIFY_BUTTON
+    RECTIFY_BUTTON,
+    LEFTVIEW_BUTTON
 };
 
 // various settings
@@ -65,10 +74,17 @@ public:
     int p;
     MyInit() 
     {
+        
+    }
+
+    static void Init()
+    {
+
         cv::namedWindow("CPU", cv::WINDOW_NORMAL);
         resizeWindow("CPU",800,600);
         cv::createButton("pause",(cv::ButtonCallback)buttonFunc, (void *) PAUSE_BUTTON,QT_CHECKBOX,0);
         cv::createButton("rectify",(cv::ButtonCallback)buttonFunc, (void *) RECTIFY_BUTTON,QT_CHECKBOX,g_rectify);
+        cv::createButton("leftView",(cv::ButtonCallback)buttonFunc, (void *) LEFTVIEW_BUTTON,QT_CHECKBOX,g_showLeft);
         cv::createButton("key point",(cv::ButtonCallback)buttonFunc, (void *) KEYPOINT_BUTTON,QT_CHECKBOX,0);
         cv::createButton("surf",(cv::ButtonCallback)buttonFunc, (void *) SURF_BUTTON,QT_CHECKBOX,g_useSurf);
         cv::createButton("cpu",(cv::ButtonCallback)buttonFunc, (void *) CPU_BUTTON,QT_CHECKBOX,g_useCPU);
@@ -102,73 +118,127 @@ public:
         
         //cv::createB
         cv::namedWindow("GPU", cv::WINDOW_OPENGL);
+        cudaDeviceReset();
         cv::gpu::setGlDevice();
         resizeWindow("GPU",800,600);
+
     }
 };
 
 MyInit defInits;
 
-cv::gpu::VideoReader_GPU *d_reader;
-VideoCapture webcam;
-VideoWriter outputVideo;
-std::string fname;
-
-ORB_GPU orbGpu;
-SURF_GPU surfGpu(200);
-// GPU defaults to 100 hessian threshold, which seems to cut off when features are accepted, related to image blurr
-SURF surfCPU(100);
-ORB  orbCPU;
-
-cv::gpu::GpuMat gpuDetectKeyPoints;
-cv::gpu::GpuMat gpuDetectDescriptors;
-
-HANDLE serverThread = NULL;
-
-Mat cpuDetectDescriptors;
-std::vector<DMatch> matches;
-
-Mat src;
-Mat srcGray;
-cv::gpu::GpuMat detectImage;
-cv::gpu::GpuMat detectImageGray;
-
-std::vector<cv::KeyPoint> detectKeyPoints;
-std::vector<cv::KeyPoint> cpuDetectKeyPoints;
-
-cv::gpu::GpuMat maskFrame;
-Mat cpuMaskFrame;
-
-
-void updateDescriptors()
+class GH
 {
-    if (g_useSurf) 
+public:
+    GH (std::string _fname) : 
+      surfGpu(200),
+          surfCPU(100),
+          fname(_fname),
+          reader(_fname),
+          serverThread(NULL)
+      {
+          //src = cv::imread("e:\\camera_egs\\lampref2.png");
+          src = cv::imread("e:\\camera_egs\\detect.png");
+          cvtColor(src, srcGray, CV_RGB2GRAY);
+          dst.upload(src);
+          detectImage.upload(src);
+
+          cv::gpu::cvtColor(dst, detectImageGray, CV_RGB2GRAY);
+
+          // do you want this???
+          //cv::gpu::bilateralFilter(dst,detectImage, 30, 24, 6.5);
+
+          // GPU version does not do this by default, which casues to much variance
+          orbGpu.blurForDescriptor = true;
+
+          if (g_useSurf) 
+          {
+              surfGpu(detectImageGray, maskFrame, gpuDetectKeyPoints, gpuDetectDescriptors);
+              surfGpu.downloadKeypoints(gpuDetectKeyPoints, detectKeyPoints);
+
+              surfCPU(srcGray, cpuMaskFrame, cpuDetectKeyPoints, OutputArray(cpuDetectDescriptors));
+          }
+          else
+          {
+
+              orbGpu(detectImageGray, maskFrame, gpuDetectKeyPoints, gpuDetectDescriptors);
+              orbGpu.downloadKeyPoints(gpuDetectKeyPoints, detectKeyPoints);
+
+              orbCPU(srcGray, cpuMaskFrame, cpuDetectKeyPoints, OutputArray(cpuDetectDescriptors));
+          }
+      }
+
+    VideoCapture webcam;
+    VideoWriter outputVideo;
+    std::string fname;
+    cv::gpu::VideoReader_GPU *d_reader;
+    ORB_GPU orbGpu;
+    SURF_GPU surfGpu;
+    // GPU defaults to 100 hessian threshold, which seems to cut off when features are accepted, related to image blurr
+    SURF surfCPU;
+    ORB  orbCPU;
+
+    gpu::GpuMat dst, finalFrame;
+
+    cv::gpu::GpuMat gpuDetectKeyPoints;
+    cv::gpu::GpuMat gpuDetectDescriptors;
+
+    HANDLE serverThread;
+
+    Mat cpuDetectDescriptors;
+    std::vector<DMatch> matches;
+
+    Mat src;
+    Mat srcGray;
+    cv::gpu::GpuMat detectImage;
+    cv::gpu::GpuMat detectImageGray;
+
+    std::vector<cv::KeyPoint> detectKeyPoints;
+    std::vector<cv::KeyPoint> cpuDetectKeyPoints;
+
+    cv::gpu::GpuMat maskFrame;
+    Mat cpuMaskFrame;
+
+    cv::VideoCapture reader;
+
+    std::vector<cv::KeyPoint> keyPoints;
+    cv::gpu::GpuMat gpuKeyPoints;
+    cv::gpu::GpuMat gpuDescriptors;
+    Mat cpuDescriptors;
+    typedef std::vector<cv::KeyPoint>::iterator keyPointIt;
+    typedef std::vector<cv::KeyPoint> keyPointList;
+
+    BFMatcher_GPU matcher; //(g_useSurf ? NORM_L2 : NORM_L1);
+    BFMatcher matcherCPU; //(g_useSurf ? NORM_L2 : NORM_L1);
+
+    GpuMat trainIdx, distance;
+
+    cv::Mat frame, drawFrame;
+
+    void updateDescriptors()
     {
-        surfGpu(detectImageGray, maskFrame, gpuDetectKeyPoints, gpuDetectDescriptors);
-        surfGpu.downloadKeypoints(gpuDetectKeyPoints, detectKeyPoints);
+        if (g_useSurf) 
+        {
+            surfGpu(detectImageGray, maskFrame, gpuDetectKeyPoints, gpuDetectDescriptors);
+            surfGpu.downloadKeypoints(gpuDetectKeyPoints, detectKeyPoints);
 
-        cpuDetectDescriptors = Mat();
-        surfCPU(srcGray, cpuMaskFrame, cpuDetectKeyPoints, OutputArray(cpuDetectDescriptors));
+            cpuDetectDescriptors = Mat();
+            surfCPU(srcGray, cpuMaskFrame, cpuDetectKeyPoints, OutputArray(cpuDetectDescriptors));
+        }
+        else
+        {
+            orbGpu(detectImageGray, maskFrame, gpuDetectKeyPoints, gpuDetectDescriptors);
+            orbGpu.downloadKeyPoints(gpuDetectKeyPoints, detectKeyPoints);
+
+            cpuDetectDescriptors = Mat();
+            orbCPU(srcGray, cpuMaskFrame, cpuDetectKeyPoints, OutputArray(cpuDetectDescriptors));
+        }
+
+        matches.clear();
     }
-    else
+
+    void updateSurfOrbState(int state)
     {
-        orbGpu(detectImageGray, maskFrame, gpuDetectKeyPoints, gpuDetectDescriptors);
-        orbGpu.downloadKeyPoints(gpuDetectKeyPoints, detectKeyPoints);
-
-        cpuDetectDescriptors = Mat();
-        orbCPU(srcGray, cpuMaskFrame, cpuDetectKeyPoints, OutputArray(cpuDetectDescriptors));
-    }
-
-    matches.clear();
-}
-
-static int saveCount = 0;
-
- void *buttonFunc(int state, void* userdata)
- {
-    ButtonTypes type = (ButtonTypes) (int)userdata; 
-    switch (type) {
-    case SURF_BUTTON:
         if (!!state) 
         {
             surfGpu(detectImageGray, maskFrame, gpuDetectKeyPoints, gpuDetectDescriptors);
@@ -183,7 +253,313 @@ static int saveCount = 0;
 
             orbCPU(srcGray, cpuMaskFrame, cpuDetectKeyPoints, OutputArray(cpuDetectDescriptors));
         }
+    }
 
+    void restart()
+    {
+        d_reader->close();
+        d_reader->open(fname);
+    }
+
+    void doObjectDetection()
+    {
+        if (!g_useCPU) 
+        {
+            if (g_useSurf) 
+            {
+                surfGpu(finalFrame, maskFrame, gpuKeyPoints, gpuDescriptors);
+                surfGpu.downloadKeypoints(gpuKeyPoints, keyPoints);
+            }
+            else
+            {
+                orbGpu(finalFrame, maskFrame, gpuKeyPoints, gpuDescriptors);
+                orbGpu.downloadKeyPoints(gpuKeyPoints, keyPoints);
+            }
+
+            matcher.matchSingle(gpuDescriptors, gpuDetectDescriptors, trainIdx, distance);
+            matcher.matchDownload(trainIdx, distance, matches);
+        } 
+        else 
+        {
+            if (g_useSurf) 
+            {
+                surfCPU(frame, cpuMaskFrame, keyPoints, OutputArray(cpuDescriptors));
+            }
+            else
+            {
+                orbCPU(frame, cpuMaskFrame, keyPoints, OutputArray(cpuDescriptors));
+            }
+
+            if (cpuDetectDescriptors.type() != cpuDescriptors.type()) 
+            {
+                updateDescriptors();
+            }
+
+            if (cpuDetectDescriptors.total()) 
+            {
+                matcherCPU.match(cpuDescriptors, cpuDetectDescriptors, matches);
+            } 
+            else
+            {
+                matches.clear();
+            }
+        }
+
+
+        std::sort(matches.begin(),matches.end());
+
+        if (g_stepOne) 
+        {
+            g_stepOne = false;
+        }
+
+        //cv::gpu::resize(d_frame, d_frame2,cv::Size(512,512));
+
+        //rgbnorm(d_frame2);
+
+        //cv::gpu::bilateralFilter(d_frame2,d_frame3,9,18,4.5);
+
+        //mythresh(d_frame2, d_frame4, bounds);
+
+        //cv::imshow("GPU", d_frame2);
+
+        int nbMatches = std::min((unsigned int)nbMatchCount,matches.size());
+        std::vector<Point2f> mptsTrain, mptsQuery;
+
+        keyPointList &currKeyPoints = g_detectKeyPoints ? detectKeyPoints : keyPoints;
+        keyPointList &drawKeyPoints = g_useCPU ? cpuDetectKeyPoints : detectKeyPoints;
+
+        Mat srcOut = src.clone();
+        drawFrame = Mat(max(srcOut.rows, frame.rows), srcOut.cols+frame.cols, CV_8U);
+
+        Mat subKeyFrame =drawFrame(Rect(0, 0,srcOut.cols, srcOut.rows));
+
+        srcGray.copyTo(subKeyFrame);
+
+        subKeyFrame = drawFrame(Rect(srcOut.cols, 0,frame.cols, frame.rows));
+
+        frame.copyTo(subKeyFrame);
+        //subKeyFrame.setTo(src);
+
+        //subKeyFrame = drawFrame.adjustROI(0, srcOut.rows+frame.rows, 0, srcOut.cols+frame.cols);
+
+        //Mat subKeyFrame = drawFrame(Range(0, srcOut.rows), Range(0, srcOut.cols));
+
+
+
+        //drawFrame = g_detectKeyPoints ? srcOut : frame;
+
+        /* for (keyPointIt i = currKeyPoints.begin(); i != currKeyPoints.end(); i++) {
+        cv::circle(drawFrame, (*i).pt, 10, cv::Scalar(0, 0, 255));
+        }*/
+
+        if (drawKeyPoints.size() != 0) 
+        {
+            // Draw all points on the image
+
+            for (int i = 0; i < drawKeyPoints.size(); i++) 
+            {
+                cv::circle(drawFrame, (drawKeyPoints[i]).pt, 10, cv::Scalar(0, 0, 255));
+            }
+
+            bool falseDetection = false;
+            Point2f center;
+            int matchCount = 0;
+
+
+            //std::vector<cv::KeyPoint> &currTrainKeyPoints = (g_useCPU ? cpuDetectKeyPoints : detectKeyPoints)
+            for (int i = 0; i < nbMatches; i++) {
+                int index = g_detectKeyPoints ? matches[i].trainIdx : matches[i].queryIdx;
+                if (index < currKeyPoints.size() && (matches[i].distance < (float) match / (g_useSurf ? 500 : 1))) {
+                    if ( mptsTrain.size() < homographyInCount ) {
+                        bool tooClose = false;
+                        for (std::vector<Point2f>::iterator iter = mptsTrain.begin(); iter != mptsTrain.end(); iter++) {
+                            Point2f diff = drawKeyPoints[matches[i].trainIdx].pt - *iter;
+                            if (sqrt(diff.ddot(diff)) < homoUniqueDist) 
+                            {
+                                tooClose = true;
+                            }
+                        }
+                        if (!tooClose) 
+                        {
+                            mptsTrain.push_back(drawKeyPoints[matches[i].trainIdx].pt);
+                            mptsQuery.push_back(keyPoints[matches[i].queryIdx].pt);
+                        }
+                    }
+                    int radius = 10;
+
+                    if (g_useSurf)
+                    {
+                        radius = 10+(matches[i].distance > 1 ? ((matches[i].distance-1)/2)*500 +10:0);
+                    }
+                    else
+                    {
+                        radius = 10+(matches[i].distance > 300 ? (matches[i].distance-300)/10:0);
+                    }
+
+                    //cv::circle(drawFrame, (drawKeyPoints[matches[i].trainIdx]).pt, radius, cv::Scalar(0, 0, 255));
+                    cv::circle(drawFrame, (keyPoints[matches[i].queryIdx]).pt+Point2f(src.cols,0), radius, cv::Scalar(0, 0, 255));
+                    cv::line(drawFrame,(drawKeyPoints[matches[i].trainIdx]).pt, (keyPoints[matches[i].queryIdx]).pt+Point2f(src.cols,0), cv::Scalar(0, 0, 255), 2);
+                    center += (currKeyPoints[index]).pt;
+                    matchCount++;
+                } else {
+                    //falseDetection = true;
+                }
+            }
+            int currDesc = 0;
+            float diff = 0;
+            center.x /= matchCount;
+            center.y /= matchCount;
+            bool notFound=true;
+            std::vector<uchar> outliers(100);
+            if (!falseDetection && matchCount && (matchCount >= minMatchCount)) {
+                if (mptsTrain.size() < 4) 
+                {
+                    mptsTrain.push_back(mptsTrain[0]);
+                    mptsQuery.push_back(mptsQuery[0]);
+                }
+                cv::Mat H = findHomography(mptsTrain,
+                    mptsQuery,
+                    RANSAC,
+                    ransacError,
+                    outliers);
+                cv::circle(drawFrame, center+Point2f(src.cols,0), 200, cv::Scalar(255, 0, 0), 10);
+                if (countNonZero(Mat(outliers)) > allowedOutliers)
+                {
+                    std::vector<Point2f> output(1);
+                    std::vector<Point2f> input(1);
+                    input[0] =  Point2f(srcOut.cols/2,srcOut.rows/2);
+                    Mat m_output(output);
+                    perspectiveTransform(input, m_output, H);
+                    cv::circle(drawFrame,output[0]+Point2f(src.cols,0), 200, cv::Scalar(0, 255, 0), 10);
+
+
+                    // send the direction change
+                    printf("output x %f final x %d center x %f", output[0].x, finalFrame.cols/2, center.x);
+                    diff = abs((float)finalFrame.cols/2-output[0].x)/((float)finalFrame.cols/2);
+                    if (output[0].x < finalFrame.cols/2 - 80)
+                    {
+                        //g_keys[rightPos] = 1;
+                        printf("inst turn right\n");
+                        currDesc = -1;
+
+                    }
+                    else if (output[0].x > finalFrame.cols/2 +80)
+                    {
+                        //g_keys[leftPos] = 1;
+                        printf("inst turn left\n");
+                        currDesc = 1;
+                    }
+                    else
+                    {
+                        printf("inst on target\n");
+                        currDesc = 0;
+                    }
+
+                    //g_sendKey = true;
+                    notFound = false;
+                }
+
+            }
+
+
+            unsigned char speed = 255*(0.1 + diff*0.8);
+
+            printf(" speed %d ", speed);
+            if (notFound) 
+            {
+                // default turn left until we find it
+                g_keys[leftPos] = 160;
+                printf("do nothing\n");
+                currDesc = 0xFF;
+            }
+
+            g_descHist[histPos] = notFound ? currDesc : currDesc;
+            histPos++;
+            if (histPos >= g_histSize) 
+            {
+                histPos = 0;
+            }
+
+            // setup keys
+            memset(g_keys, 0, sizeof(g_keys));
+            int netDir = 0;
+            int notFoundCount = 0;
+            for (int i = 0; i < g_histSize; i++)
+            {
+                if (g_descHist[i] != 0xff)
+                {
+                    netDir += g_descHist[i];
+                }
+                else    
+                {
+                    notFoundCount++;
+                }
+            }
+
+            if (netDir >= 0.4f*g_histSize) 
+            {
+                g_keys[rightPos] = speed;
+                printf("hist turn right\n");
+            }
+            else if (netDir <= -0.4f*g_histSize)
+            {
+                g_keys[leftPos] = speed;
+                printf("hist turn left\n");
+            }
+            else
+            {
+                if (notFoundCount > 0.4f*g_histSize)
+                {
+                    g_keys[leftPos] = 160;
+                    printf("not found, turn left\n");
+                }
+                else
+                {
+                    printf("hist on target\n");
+                }
+            }
+
+            /*if (currDesc >= 0.4f) 
+            {
+            g_keys[rightPos] = 1;
+            printf("hist turn right\n");
+            }
+            else if (netDir <= -0.4f)
+            {
+            g_keys[leftPos] = 1;
+            printf("hist turn left\n");
+            }
+            else
+            {
+            if (notFound)
+            {
+            g_keys[leftPos] = 1;
+            printf("not found, turn left\n");
+            }
+            else
+            {
+            printf("hist on target\n");
+            }
+            }*/
+            // send keys
+            g_sendKey = true;
+        }
+    }
+};
+
+
+GH * globals = NULL;
+
+
+static int saveCount = 0;
+
+ void *buttonFunc(int state, void* userdata)
+ {
+    ButtonTypes type = (ButtonTypes) (int)userdata; 
+    switch (type) {
+    case SURF_BUTTON:
+        globals->updateSurfOrbState(state);
         g_useSurf = !!state;
         break;
     case PAUSE_BUTTON:
@@ -191,6 +567,10 @@ static int saveCount = 0;
         break;
     case RECTIFY_BUTTON:
         g_rectify = !!state;
+        break;
+    case LEFTVIEW_BUTTON:
+        g_showLeft = !!state;
+        break;
     case KEYPOINT_BUTTON:
         g_detectKeyPoints = !!state;
         break;
@@ -204,8 +584,7 @@ static int saveCount = 0;
                 Sleep(3000);
             }
 
-            d_reader->close();
-            d_reader->open(fname);
+            globals->restart();
 
             if (resume)
             {
@@ -218,9 +597,9 @@ static int saveCount = 0;
         g_stepOne = true;
         break;
     case CPU_BUTTON:
-        matches.clear();
+        globals->matches.clear();
         g_useCPU  = !!state;
-        updateDescriptors();
+        globals->updateDescriptors();
         break;
     case FILTER_BUTTON:
         g_useFilter = !!state;
@@ -280,7 +659,7 @@ static int saveCount = 0;
                 orbCPU(srcGray, cpuMaskFrame, cpuDetectKeyPoints, OutputArray(cpuDetectDescriptors));
             }*/
 
-            char saveName[100];
+            /*char saveName[100];
             if(g_lefteyeStream)
             {
                 sprintf(saveName, "E:/camera_egs/raspi-stereo/imageleft%d.jpg", saveCount);
@@ -292,7 +671,7 @@ static int saveCount = 0;
                 sprintf(saveName, "E:/camera_egs/raspi-stereo/imageright%d.jpg", saveCount);
                 g_righteyeStream->saveLatestFrame(saveName);
             }
-            saveCount++;
+            saveCount++;*/
             break;
         }
     }
@@ -308,7 +687,6 @@ void anaglyph(cv::gpu::GpuMat& leftImage, cv::gpu::GpuMat& rightImage, cv::gpu::
 
 // all the working variables for object detection
 cv::Mat frame;
-cv::VideoCapture reader(fname);
 
 cv::gpu::GpuMat d_frame;
 cv::gpu::GpuMat d_frame2;
@@ -319,311 +697,16 @@ cv::TickMeter tm;
 std::vector<double> cpu_times;
 std::vector<double> gpu_times;
 
-std::vector<cv::KeyPoint> keyPoints;
-cv::gpu::GpuMat gpuKeyPoints;
-cv::gpu::GpuMat gpuDescriptors;
-Mat cpuDescriptors;
-typedef std::vector<cv::KeyPoint>::iterator keyPointIt;
-typedef std::vector<cv::KeyPoint> keyPointList;
-gpu::GpuMat dst, finalFrame;
 
-BFMatcher_GPU matcher(g_useSurf ? NORM_L2 : NORM_L1);
-BFMatcher matcherCPU(g_useSurf ? NORM_L2 : NORM_L1);
-
-GpuMat trainIdx, distance;
 
 // final frame to show to screen, CPU version
 Mat drawFrame;
 
-void doObjectDetection()
-{
-    if (!g_useCPU) 
-    {
-        if (g_useSurf) 
-        {
-            surfGpu(finalFrame, maskFrame, gpuKeyPoints, gpuDescriptors);
-            surfGpu.downloadKeypoints(gpuKeyPoints, keyPoints);
-        }
-        else
-        {
-            orbGpu(finalFrame, maskFrame, gpuKeyPoints, gpuDescriptors);
-            orbGpu.downloadKeyPoints(gpuKeyPoints, keyPoints);
-        }
 
-        matcher.matchSingle(gpuDescriptors, gpuDetectDescriptors, trainIdx, distance);
-        matcher.matchDownload(trainIdx, distance, matches);
-    } 
-    else 
-    {
-        if (g_useSurf) 
-        {
-            surfCPU(frame, cpuMaskFrame, keyPoints, OutputArray(cpuDescriptors));
-        }
-        else
-        {
-            orbCPU(frame, cpuMaskFrame, keyPoints, OutputArray(cpuDescriptors));
-        }
-
-        if (cpuDetectDescriptors.type() != cpuDescriptors.type()) 
-        {
-            updateDescriptors();
-        }
-
-        if (cpuDetectDescriptors.total()) 
-        {
-            matcherCPU.match(cpuDescriptors, cpuDetectDescriptors, matches);
-        } 
-        else
-        {
-            matches.clear();
-        }
-    }
-
-
-    std::sort(matches.begin(),matches.end());
-
-    if (g_stepOne) 
-    {
-        g_stepOne = false;
-    }
-
-    //cv::gpu::resize(d_frame, d_frame2,cv::Size(512,512));
-
-    //rgbnorm(d_frame2);
-
-    //cv::gpu::bilateralFilter(d_frame2,d_frame3,9,18,4.5);
-
-    //mythresh(d_frame2, d_frame4, bounds);
-
-    //cv::imshow("GPU", d_frame2);
-
-    int nbMatches = std::min((unsigned int)nbMatchCount,matches.size());
-    std::vector<Point2f> mptsTrain, mptsQuery;
-
-    keyPointList &currKeyPoints = g_detectKeyPoints ? detectKeyPoints : keyPoints;
-    keyPointList &drawKeyPoints = g_useCPU ? cpuDetectKeyPoints : detectKeyPoints;
-
-    Mat srcOut = src.clone();
-    drawFrame = Mat(max(srcOut.rows, frame.rows), srcOut.cols+frame.cols, CV_8U);
-
-    Mat subKeyFrame =drawFrame(Rect(0, 0,srcOut.cols, srcOut.rows));
-
-    srcGray.copyTo(subKeyFrame);
-
-    subKeyFrame = drawFrame(Rect(srcOut.cols, 0,frame.cols, frame.rows));
-
-    frame.copyTo(subKeyFrame);
-    //subKeyFrame.setTo(src);
-
-    //subKeyFrame = drawFrame.adjustROI(0, srcOut.rows+frame.rows, 0, srcOut.cols+frame.cols);
-
-    //Mat subKeyFrame = drawFrame(Range(0, srcOut.rows), Range(0, srcOut.cols));
-
-
-
-    //drawFrame = g_detectKeyPoints ? srcOut : frame;
-
-    /* for (keyPointIt i = currKeyPoints.begin(); i != currKeyPoints.end(); i++) {
-    cv::circle(drawFrame, (*i).pt, 10, cv::Scalar(0, 0, 255));
-    }*/
-
-    if (drawKeyPoints.size() != 0) 
-    {
-        // Draw all points on the image
-
-        for (int i = 0; i < drawKeyPoints.size(); i++) 
-        {
-            cv::circle(drawFrame, (drawKeyPoints[i]).pt, 10, cv::Scalar(0, 0, 255));
-        }
-
-        bool falseDetection = false;
-        Point2f center;
-        int matchCount = 0;
-
-
-        //std::vector<cv::KeyPoint> &currTrainKeyPoints = (g_useCPU ? cpuDetectKeyPoints : detectKeyPoints)
-        for (int i = 0; i < nbMatches; i++) {
-            int index = g_detectKeyPoints ? matches[i].trainIdx : matches[i].queryIdx;
-            if (index < currKeyPoints.size() && (matches[i].distance < (float) match / (g_useSurf ? 500 : 1))) {
-                if ( mptsTrain.size() < homographyInCount ) {
-                    bool tooClose = false;
-                    for (std::vector<Point2f>::iterator iter = mptsTrain.begin(); iter != mptsTrain.end(); iter++) {
-                        Point2f diff = drawKeyPoints[matches[i].trainIdx].pt - *iter;
-                        if (sqrt(diff.ddot(diff)) < homoUniqueDist) 
-                        {
-                            tooClose = true;
-                        }
-                    }
-                    if (!tooClose) 
-                    {
-                        mptsTrain.push_back(drawKeyPoints[matches[i].trainIdx].pt);
-                        mptsQuery.push_back(keyPoints[matches[i].queryIdx].pt);
-                    }
-                }
-                int radius = 10;
-
-                if (g_useSurf)
-                {
-                    radius = 10+(matches[i].distance > 1 ? ((matches[i].distance-1)/2)*500 +10:0);
-                }
-                else
-                {
-                    radius = 10+(matches[i].distance > 300 ? (matches[i].distance-300)/10:0);
-                }
-
-                //cv::circle(drawFrame, (drawKeyPoints[matches[i].trainIdx]).pt, radius, cv::Scalar(0, 0, 255));
-                cv::circle(drawFrame, (keyPoints[matches[i].queryIdx]).pt+Point2f(src.cols,0), radius, cv::Scalar(0, 0, 255));
-                cv::line(drawFrame,(drawKeyPoints[matches[i].trainIdx]).pt, (keyPoints[matches[i].queryIdx]).pt+Point2f(src.cols,0), cv::Scalar(0, 0, 255), 2);
-                center += (currKeyPoints[index]).pt;
-                matchCount++;
-            } else {
-                //falseDetection = true;
-            }
-        }
-        int currDesc = 0;
-        float diff = 0;
-        center.x /= matchCount;
-        center.y /= matchCount;
-        bool notFound=true;
-        std::vector<uchar> outliers(100);
-        if (!falseDetection && matchCount && (matchCount >= minMatchCount)) {
-            if (mptsTrain.size() < 4) 
-            {
-                mptsTrain.push_back(mptsTrain[0]);
-                mptsQuery.push_back(mptsQuery[0]);
-            }
-            cv::Mat H = findHomography(mptsTrain,
-                mptsQuery,
-                RANSAC,
-                ransacError,
-                outliers);
-            cv::circle(drawFrame, center+Point2f(src.cols,0), 200, cv::Scalar(255, 0, 0), 10);
-            if (countNonZero(Mat(outliers)) > allowedOutliers)
-            {
-                std::vector<Point2f> output(1);
-                std::vector<Point2f> input(1);
-                input[0] =  Point2f(srcOut.cols/2,srcOut.rows/2);
-                Mat m_output(output);
-                perspectiveTransform(input, m_output, H);
-                cv::circle(drawFrame,output[0]+Point2f(src.cols,0), 200, cv::Scalar(0, 255, 0), 10);
-
-
-                // send the direction change
-                printf("output x %f final x %d center x %f", output[0].x, finalFrame.cols/2, center.x);
-                diff = abs((float)finalFrame.cols/2-output[0].x)/((float)finalFrame.cols/2);
-                if (output[0].x < finalFrame.cols/2 - 80)
-                {
-                    //g_keys[rightPos] = 1;
-                    printf("inst turn right\n");
-                    currDesc = -1;
-
-                }
-                else if (output[0].x > finalFrame.cols/2 +80)
-                {
-                    //g_keys[leftPos] = 1;
-                    printf("inst turn left\n");
-                    currDesc = 1;
-                }
-                else
-                {
-                    printf("inst on target\n");
-                    currDesc = 0;
-                }
-
-                //g_sendKey = true;
-                notFound = false;
-            }
-
-        }
-
-
-        unsigned char speed = 255*(0.1 + diff*0.8);
-
-        printf(" speed %d ", speed);
-        if (notFound) 
-        {
-            // default turn left until we find it
-            g_keys[leftPos] = 160;
-            printf("do nothing\n");
-            currDesc = 0xFF;
-        }
-
-        g_descHist[histPos] = notFound ? currDesc : currDesc;
-        histPos++;
-        if (histPos >= g_histSize) 
-        {
-            histPos = 0;
-        }
-
-        // setup keys
-        memset(g_keys, 0, sizeof(g_keys));
-        int netDir = 0;
-        int notFoundCount = 0;
-        for (int i = 0; i < g_histSize; i++)
-        {
-            if (g_descHist[i] != 0xff)
-            {
-                netDir += g_descHist[i];
-            }
-            else    
-            {
-                notFoundCount++;
-            }
-        }
-
-        if (netDir >= 0.4f*g_histSize) 
-        {
-            g_keys[rightPos] = speed;
-            printf("hist turn right\n");
-        }
-        else if (netDir <= -0.4f*g_histSize)
-        {
-            g_keys[leftPos] = speed;
-            printf("hist turn left\n");
-        }
-        else
-        {
-            if (notFoundCount > 0.4f*g_histSize)
-            {
-                g_keys[leftPos] = 160;
-                printf("not found, turn left\n");
-            }
-            else
-            {
-                printf("hist on target\n");
-            }
-        }
-
-        /*if (currDesc >= 0.4f) 
-        {
-        g_keys[rightPos] = 1;
-        printf("hist turn right\n");
-        }
-        else if (netDir <= -0.4f)
-        {
-        g_keys[leftPos] = 1;
-        printf("hist turn left\n");
-        }
-        else
-        {
-        if (notFound)
-        {
-        g_keys[leftPos] = 1;
-        printf("not found, turn left\n");
-        }
-        else
-        {
-        printf("hist on target\n");
-        }
-        }*/
-        // send keys
-        g_sendKey = true;
-    }
-}
 
 int main(int argc, const char* argv[])
 {
-
+    std::string fname;
     if (g_source != WEBCAM) {
         if (argc != 2) 
         {
@@ -637,9 +720,12 @@ int main(int argc, const char* argv[])
         }
     }
 
+    MyInit::Init();
+    globals = new GH(fname);
+
     // Start server socket
 
-    serverThread = CreateThread(NULL, 0, serverListenProc, 0, 0, NULL);
+    globals->serverThread = CreateThread(NULL, 0, serverListenProc, 0, 0, NULL);
 
     bounds[0][0] = 0;
     bounds[0][1] = 255;
@@ -647,14 +733,17 @@ int main(int argc, const char* argv[])
     bounds[1][1] = 255;
     bounds[2][0] = 0;
     bounds[2][1] = 255;
-    defInits.p = 4;
-    resizeWindow("CPU",800,600);
+    defInits.p = 4;    
+
+    //resizeWindow("CPU",800,600);
     Sleep(50);
-    VideoStream leftEyeStream(g_source, "ashpi2.fritz.box");
-    g_lefteyeStream = &leftEyeStream;
-    Sleep(50);
-    VideoStream rightEyeStream(g_source, "ashpi.fritz.box");//"E:\\camera_egs\\video2.h264");
+    
+    
+    VideoStream rightEyeStream(g_source, "ashpi2.fritz.box");//"E:\\camera_egs\\video2.h264");
     g_righteyeStream = &rightEyeStream;
+    Sleep(50);
+    VideoStream leftEyeStream(g_source, "ashpi.fritz.box");
+    g_lefteyeStream = &leftEyeStream;
 
     //set rectify matrices
     leftEyeStream.setRectifyMaps("E:\\camera_egs\\stereo_camera_calibrate\\mx1.xml", "E:\\camera_egs\\stereo_camera_calibrate\\my1.xml");
@@ -664,7 +753,7 @@ int main(int argc, const char* argv[])
     //char EXT[] = {(char)(ex & 0XFF) , (char)((ex & 0XFF00) >> 8),(char)((ex & 0XFF0000) >> 16),(char)((ex & 0XFF000000) >> 24), 0};
     // CV_FOURCC('m', 'p', '4', 'v')
     // CV_FOURCC('P','I','M','1')
-    bool res = outputVideo.open("e:\\camera_egs\\stereo.avi", CV_FOURCC('m', 'p', '4', 'v'),25,cv::Size(1920,1088));
+    bool res = globals->outputVideo.open("e:\\camera_egs\\stereo.avi", CV_FOURCC('m', 'p', '4', 'v'),25,cv::Size(1920,1088));
     assert(res);
     /*switch (g_source)
     {
@@ -696,40 +785,21 @@ int main(int argc, const char* argv[])
         d_reader->dumpFormat(std::cout);
     }*/
 
-    //src = cv::imread("e:\\camera_egs\\lampref2.png");
-    src = cv::imread("e:\\camera_egs\\detect.png");
-    cvtColor(src, srcGray, CV_RGB2GRAY);
-    dst.upload(src);
-    detectImage.upload(src);
-
-    cv::gpu::cvtColor(dst, detectImageGray, CV_RGB2GRAY);
-
-    // do you want this???
-    //cv::gpu::bilateralFilter(dst,detectImage, 30, 24, 6.5);
-
-    // GPU version does not do this by default, which casues to much variance
-    orbGpu.blurForDescriptor = true;
-
-    if (g_useSurf) 
-    {
-        surfGpu(detectImageGray, maskFrame, gpuDetectKeyPoints, gpuDetectDescriptors);
-        surfGpu.downloadKeypoints(gpuDetectKeyPoints, detectKeyPoints);
-
-        surfCPU(srcGray, cpuMaskFrame, cpuDetectKeyPoints, OutputArray(cpuDetectDescriptors));
-    }
-    else
-    {
-        
-        orbGpu(detectImageGray, maskFrame, gpuDetectKeyPoints, gpuDetectDescriptors);
-        orbGpu.downloadKeyPoints(gpuDetectKeyPoints, detectKeyPoints);
-
-        orbCPU(srcGray, cpuMaskFrame, cpuDetectKeyPoints, OutputArray(cpuDetectDescriptors));
-    }
+    
 
     gpu::GpuMat d_disp;
+    gpu::GpuMat d_color_disp;
 
     StereoMatching strCtl;
 
+    gpu::GpuMat dst, finalFrame;
+
+    VisionTools::StopWatch loopTime;
+
+#define TIMER_THRESHOLD 0.020
+
+    loopTime.start();
+    int count = 0;
     for (;;)
     {
         //tm.reset(); tm.start();
@@ -786,9 +856,130 @@ int main(int argc, const char* argv[])
             //        break;
             //    }
             //}
-            leftEyeStream.readLatestFrame();
+
+            bool leftres = true;
+            bool rightres = true;
+            int max_throw = 20;
+            bool saveNow = false;
+            //leftEyeStream.readLatestFrame();
+#define SKIP_MAX 300
+            static int savedSkip[2][SKIP_MAX];
+            static int savedSkipPos = 0;
+            static double savedTime[SKIP_MAX];
+
+            VisionTools::StopWatch captureTime;
+            captureTime.start();
+
+            int leftSkip = 0, rightSkip = 0;
+            //printf("quque %d\n", rightEyeStream.m_reader->framesInQueue());
+            if (rightEyeStream.m_reader->framesInQueue() > 4)
+            {
+                printf("right overfilled\n");
+            }
+
+            if (leftEyeStream.m_reader->framesInQueue() > 4)
+            {
+                printf("left overfilled\n");
+            }
+
+            while (//max_throw &&
+                (leftres || rightres)) 
+            {
+                //if (!rightres)
+                {
+                    rightres = rightEyeStream.readOnlyOneLatestFrame();
+                }
+                //rightres = false;
+                //if (!leftres)
+                {
+                    leftres = leftEyeStream.readOnlyOneLatestFrame();
+                }
+                    //.readOnlyOneLatestFrame();
+                max_throw++;
+
+             /*   if ((!leftres || !rightres))
+                {
+                    Sleep(1);
+                }*/
+
+                if (rightres)
+                {
+                    rightSkip++;
+                }
+
+                if (leftres)
+                {
+                    leftSkip++;
+                }
+
+                if (rightres || leftres)
+                {
+                    saveNow = true;
+                }
+
+                //break;
+            }
+            captureTime.stop();
+            if (captureTime.get_stopped_time() > TIMER_THRESHOLD)
+            {
+                printf("captureTime %4.2f\n", captureTime.get_stopped_time());
+            }
+
+            savedSkip[0][savedSkipPos] = leftSkip;
+            savedSkip[1][savedSkipPos] = rightSkip;
+            loopTime.stop();
+            savedTime[savedSkipPos] = loopTime.get_stopped_time();
+            if (loopTime.get_stopped_time() > TIMER_THRESHOLD)
+            {
+                printf("looptime %4.2f\n", loopTime.get_stopped_time());
+            }
+            loopTime.start();
+
             
-            rightEyeStream.readLatestFrame();
+
+            savedSkipPos++;
+
+            if (false &&
+                (savedSkipPos > SKIP_MAX))
+            {
+                printf("skip data left  ");
+                for(int i = 0; i < SKIP_MAX; i++)
+                {
+                    printf("%1d ", savedSkip[0][i]);
+                }
+                printf("\nskip data right ");
+                for(int i = 0; i < SKIP_MAX; i++)
+                {
+                    printf("%1d ", savedSkip[1][i]);
+                }
+               /* printf("\nskip data time  ");
+                for(int i = 0; i < SKIP_MAX; i++)
+                {
+                    printf("%9.2f ", savedTime[i]*1000);
+                }*/
+
+                savedSkipPos = 0;
+            }
+
+           /* if (saveNow)
+            {
+                char saveName[100];
+                if(g_lefteyeStream)
+                {
+                    sprintf(saveName, "E:/camera_egs/raspi-stereo/imagealeft%d.jpg", count);
+                    g_lefteyeStream->saveLatestFrame(saveName);
+                }
+
+                if (g_righteyeStream)
+                {
+                    sprintf(saveName, "E:/camera_egs/raspi-stereo/imagearight%d.jpg", count);
+                    g_righteyeStream->saveLatestFrame(saveName);
+                }
+                count++;
+            }*/
+
+            //leftEyeStream.readLatestFrame();
+            //rightEyeStream.readLatestFrame();
 
             if (g_rectify) 
             {
@@ -807,37 +998,41 @@ int main(int argc, const char* argv[])
                 rightEyeStream.bilatralFilter();
             }
 
-            switch (g_stereo)
-            {
-            case BM:
-                {
-                    /*if (leftEyeStream.m_gCurrentFrameGray.size() != d_disp.size())
-                    {
-                        d_disp.create(leftEyeStream.m_gCurrentFrameGray.size(), CV_8U);
-                    }*/
-                    strCtl.getDisparityMapBM(leftEyeStream.m_gCurrentFrameGrayRectified, 
-                                             rightEyeStream.m_gCurrentFrameGrayRectified,
-                                             d_disp);
-                   /* cv::gpu::GpuMat tmp;
-                    gpu::normalize(d_disp, tmp, 255);
-                    d_disp = tmp;*/
-                    break;
-                }
-            case BP:
-                strCtl.getDisparityMapBP(leftEyeStream.m_gCurrentFrameGray, rightEyeStream.m_gCurrentFrameGray, d_disp);
-                break;
-            case CSBP:
-                strCtl.getDisparityMapCSBP(leftEyeStream.m_gCurrentFrameGray, rightEyeStream.m_gCurrentFrameGray, d_disp);
-                break;
-            default:
-                assert(0);
-            }
+            //switch (g_stereo)
+            //{
+            //case BM:
+            //    {
+            //        /*if (leftEyeStream.m_gCurrentFrameGray.size() != d_disp.size())
+            //        {
+            //            d_disp.create(leftEyeStream.m_gCurrentFrameGray.size(), CV_8U);
+            //        }*/
+            //        strCtl.getDisparityMapBM(leftEyeStream.m_gCurrentFrameGrayRectified, 
+            //                                 rightEyeStream.m_gCurrentFrameGrayRectified,
+            //                                 d_disp);
+            //       /* cv::gpu::GpuMat tmp;
+            //        gpu::normalize(d_disp, tmp, 255);
+            //        d_disp = tmp;*/
+            //        break;
+            //    }
+            //case BP:
+            //    strCtl.getDisparityMapBP(leftEyeStream.m_gCurrentFrameGray, rightEyeStream.m_gCurrentFrameGray, d_disp);
+            //    break;
+            //case CSBP:
+            //    strCtl.getDisparityMapCSBP(leftEyeStream.m_gCurrentFrameGray, rightEyeStream.m_gCurrentFrameGray, d_disp);
+            //    break;
+            //default:
+            //    assert(0);
+            //}
+
+            //cv::gpu::drawColorDisp(d_disp,
+            //               d_color_disp,
+            //               g_ndispMax);
 
             //combine left and right into one window  
             // this section of code drops the code to 14fps
             const int frameCols = leftEyeStream.m_gCurrentFrameGray.cols;
             const int frameRows = leftEyeStream.m_gCurrentFrameGray.rows;
-            if (finalFrame.size() != cv::Size(frameCols*2, frameRows*2))
+            /*if (finalFrame.size() != cv::Size(frameCols*2, frameRows*2))
             {
                 finalFrame = cv::gpu::GpuMat(frameRows*2, frameCols*2, CV_8U, cv::Scalar(0));
             }
@@ -848,11 +1043,15 @@ int main(int argc, const char* argv[])
 
             subKeyFrame = finalFrame(Rect(frameCols, 0,frameCols, frameRows));
 
-            rightEyeStream.m_gCurrentFrameGray.copyTo(subKeyFrame);
+            rightEyeStream.m_gCurrentFrameGray.copyTo(subKeyFrame);*/
 
-            subKeyFrame = finalFrame(Rect(0, frameRows,frameCols, frameRows));
+            /*subKeyFrame = finalFrame(Rect(0, frameRows,frameCols, frameRows));
 
             d_disp.copyTo(subKeyFrame);
+
+            subKeyFrame = finalFrame(Rect(frameCols, frameRows,frameCols, frameRows));
+
+            d_disp.copyTo(subKeyFrame);*/
             
             //End left and right composition
             
@@ -882,12 +1081,20 @@ int main(int argc, const char* argv[])
 
         if (!g_skipProcessing)
         {
-            doObjectDetection();
+            globals->doObjectDetection();
         }
-
+        
+        //rightEyeStream.m_gCurrentFrame = leftEyeStream.m_gCurrentFrame;
+        VisionTools::StopWatch displayTime;
+        displayTime.start();
+        //leftEyeStream.m_gCurrentFrame.download(drawFrame);
         //cv::imshow("CPU", drawFrame);
-        cv::imshow("GPU", finalFrame);
-
+        cv::imshow("GPU", (g_showLeft ? leftEyeStream.m_gCurrentFrame : rightEyeStream.m_gCurrentFrame));
+        displayTime.stop();
+        if (displayTime.get_stopped_time() > TIMER_THRESHOLD)
+        {
+            printf("displayTime %4.2f\n", displayTime.get_stopped_time());
+        }
         /*
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     
@@ -907,12 +1114,13 @@ int main(int argc, const char* argv[])
     
         // draw scene
         */
-
+        VisionTools::StopWatch keyTime;
+        keyTime.start();
         int key = cv::waitKey(1);
 
         switch (key) {
         case 'q':
-            outputVideo.release();
+            globals->outputVideo.release();
             return 0;
         case 'w':
             g_keys[forwardPos] = 1;
@@ -939,6 +1147,12 @@ int main(int argc, const char* argv[])
         {
             Sleep(10);
         }
+
+        keyTime.stop();
+        if (keyTime.get_stopped_time() > TIMER_THRESHOLD)
+        {
+            printf("keyTime %4.2f\n", keyTime.get_stopped_time());
+        }
     }
 
     if (!cpu_times.empty() && !gpu_times.empty())
@@ -955,10 +1169,12 @@ int main(int argc, const char* argv[])
         std::cout << "GPU : Avg : " << gpu_avg << " ms FPS : " << 1000.0 / gpu_avg << std::endl;
     }
 
-    if (d_reader) 
+    if (globals->d_reader) 
     {
-        delete d_reader;
+        delete globals->d_reader;
     }
+
+    delete globals;
 
     return 0;
 }

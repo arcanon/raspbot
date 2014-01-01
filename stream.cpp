@@ -2,17 +2,24 @@
 
 using namespace cv;
 
-VideoStream::VideoStream(SourceType sourceType, std::string fname) :
- m_fname(fname),
- m_sourceType(sourceType),
- m_h264source(fname)
+VideoStream::VideoStream(SourceType sourceType, std::string fname)
 {
+    init(sourceType, fname);
+}
+
+void VideoStream::init(SourceType sourceType, std::string fname)
+{
+    m_fname = fname;
+    m_sourceType = sourceType;
+    m_h264source.init(fname);
     switch (g_source)
     {
         case SOCKETIN:
         case STDIN:
         {
             m_reader = new cv::gpu::VideoReader_GPU(cv::Ptr<H264StreamSource>(&m_h264source));
+
+            m_h264source.m_reader = m_reader;
             break;
         }
         case FILEIN:
@@ -36,6 +43,28 @@ VideoStream::VideoStream(SourceType sourceType, std::string fname) :
     if (m_reader) {
         m_reader->dumpFormat(std::cout);
     }
+}
+
+bool VideoStream::readOnlyOneLatestFrame()
+{
+    if (!m_h264source.isStarted())
+    {
+        assert(0);
+        return false;
+    }
+
+     switch (g_source)
+    {
+        case SOCKETIN:
+        case STDIN:
+        {
+            return m_reader->read(m_gCurrentFrame);
+        }
+        default:
+            assert(0);
+            return false;
+     }
+
 }
 
 bool VideoStream::readLatestFrame()
@@ -89,7 +118,7 @@ bool VideoStream::readLatestFrame()
     }
 
     //cv::gpu::resize(d_frame, d_frame2,cv::Size(512,512));
-    cv::gpu::cvtColor(m_gCurrentFrame, m_gCurrentFrameGray, (g_source == WEBCAM ? CV_RGB2GRAY : CV_RGBA2GRAY));
+    //cv::gpu::cvtColor(m_gCurrentFrame, m_gCurrentFrameGray, (g_source == WEBCAM ? CV_RGB2GRAY : CV_RGBA2GRAY));
 
     if (g_useFilter)
     {
@@ -136,7 +165,10 @@ bool VideoStream::bilatralFilter()
 
 bool VideoStream::rectifyCurrentFrame()
 {
-    gpu::remap(m_gCurrentFrameGray, m_gCurrentFrameGrayRectified, gmx, gmy,INTER_LINEAR);
+    gpu::remap(m_gCurrentFrame, m_gCurrentFrameRectified, gmx, gmy,INTER_LINEAR);
+
+
+    cv::gpu::cvtColor(m_gCurrentFrameRectified, m_gCurrentFrameGrayRectified, (g_source == WEBCAM ? CV_RGB2GRAY : CV_RGBA2GRAY));
     return true;
 }
 

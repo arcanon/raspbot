@@ -6,6 +6,8 @@
 
 #include "globals.h"
 #include <iostream>
+#include <fstream>
+
 
 class H264StreamSource : public cv::gpu::VideoReader_GPU::VideoSource 
 {
@@ -16,13 +18,30 @@ public:
 
     SOCKET ConnectSocket;
 
+    cv::gpu::VideoReader_GPU *m_reader;
+
 
     H264StreamSource(std::string serverAddr) :
       inputThread(NULL),
       started(false),
-      m_vid_server(serverAddr),
       ConnectSocket(INVALID_SOCKET)
+      {
+        init(serverAddr);
+      }
+
+    H264StreamSource() :
+      started(false),
+      m_vid_server(""),
+      ConnectSocket(INVALID_SOCKET),
+      inputThread(NULL)
       {}
+
+     void init(std::string serverAddr) 
+     {
+         m_reader = NULL;
+         m_vid_server = serverAddr;
+     }
+
     ~H264StreamSource() {}
 
     cv::gpu::VideoReader_GPU::FormatInfo format() const {
@@ -30,17 +49,24 @@ public:
         // hard code for rasppi vid
         ret.chromaFormat = cv::gpu::VideoReader_GPU::YUV420;
         ret.codec = cv::gpu::VideoReader_GPU::H264;
-        ret.height = 1080;
-        ret.width = 1920;
+        ret.height = 480;
+        ret.width = 640;
 
         return ret;
     }
 
     int run() {
-        const int blockSize = 50000;
+        const int blockSize = 1024;
+        int NALBlockSize = 0;
         int prevSize = 0;
+        int NALCount = 0;
+        int framesAdded = 0;
+        int falseCount = 0;
         unsigned char data[blockSize];
         unsigned char dataNew[blockSize];
+
+        std::ofstream myFile (this->m_vid_server.c_str(), std::ios::out | std::ios::binary);
+        
 
         if (g_source == STDIN) 
         {
@@ -66,6 +92,12 @@ public:
         {
             WSADATA wsaData = {0};
             int iResult = 0;
+
+            iResult = WSAStartup(MAKEWORD(2,2), &wsaData);
+            if (iResult != 0) {
+                printf("WSAStartup failed with error: %d\n", iResult);
+                return 1;
+            }
 
         //    int i = 1;
 
@@ -114,6 +146,7 @@ public:
 
             freeaddrinfo(result);   
 
+            // iMode =1 is blocking, 0 not
             u_long iMode=1;
             ioctlsocket(ConnectSocket,FIONBIO,&iMode);
             iResult = blockSize;
@@ -122,13 +155,29 @@ public:
             // later we decompose the frames as fast as possible later
 
             started = true;
+            LARGE_INTEGER last, current;
+            LARGE_INTEGER freq;
+            QueryPerformanceCounter(&last);
+            QueryPerformanceFrequency(&freq);
+            int timeBlockCount = 0;
             do {
-                while (iResult == blockSize) {
+                while (iResult == blockSize) 
+                {
                     iResult = recv(ConnectSocket, (char *)dataNew, blockSize, 0);
 
                     if ( iResult > 0 )
                     {
-                        //printf("Bytes received: %d\n", iResult);
+                        timeBlockCount += iResult;
+
+                        QueryPerformanceCounter(&current);
+                        float timeElapsedSecs = ((float)(current.QuadPart - last.QuadPart))/freq.QuadPart;
+                        if (timeElapsedSecs > 5.0)
+                        {
+                            printf("%s Bytes per sec: %f fps %f\n", m_vid_server.c_str(), (float)timeBlockCount/(timeElapsedSecs), (float)framesAdded/(timeElapsedSecs));
+                            timeBlockCount = 0;
+                            last = current;
+                            framesAdded = 0;
+                        }
                         
                         memcpy(data,dataNew,iResult);
                         prevSize = iResult;
@@ -158,13 +207,63 @@ public:
 
                 }
 
+                
+
                 assert(prevSize >= 0 && prevSize <= blockSize);
+
                 if (prevSize) 
                 {
-                    
+                    bool nalFound = false;
+                    for (int i = 0; i < prevSize-4; i++)
+                    {
+                        if ((data[i] == 0) &&
+                            (data[i+1] == 0) &&
+                            (data[i+2] == 0) &&
+                            (data[i+3] == 1))
+                        {
+                            NALCount++;
+                            nalFound = true;
+                            //printf("%s, NAL found %02x\n", this->m_vid_server.c_str(), data[i+4]);
+                        }
+                    }
+
+                    if (nalFound)
+                    {
+                        //printf("%s, nalblock size %d\n", this->m_vid_server.c_str(), NALBlockSize);
+                        NALBlockSize = 0;
+                    }
+                    else
+                    {
+                        NALBlockSize +=prevSize;
+                    }
+
+                    int start = 0;
+                    if (m_reader)
+                    {
+                        start = m_reader->framesInQueue();
+                    }
                     parseVideoData(data, prevSize);
+                    /*myFile.write ((char*)data, prevSize);
+                    myFile.flush();
+                    myFile.close();
+                    myFile.open(this->m_vid_server, std::ios::app | std::ios::binary);
+                    myFile.seekp(0,std::ios_base::end);*/
                     // that data is now processed
+
                     //printf("parsed: %d\n", prevSize);
+
+                    if (m_reader 
+                        //&& (this->m_vid_server == "ashpi.fritz.box")
+                        )
+                    {
+                        framesAdded += (m_reader->framesInQueue()- start);
+                        //printf("diff %d\n", (m_reader->framesInQueue()- start));
+                        if ((m_reader->framesInQueue()- start) > 1)
+                        {
+                            falseCount+= (m_reader->framesInQueue()- start);
+                            printf("%s, error frames more %d size %d fa %d, nc %d fc %d\n", this->m_vid_server.c_str(), (m_reader->framesInQueue()- start), prevSize, framesAdded, NALCount, falseCount);
+                        }
+                    }
                     prevSize = 0;
                     
                 }

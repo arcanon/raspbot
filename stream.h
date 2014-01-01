@@ -25,6 +25,13 @@
 
 class VideoStream {
 public:
+    VideoStream () :
+      m_fname("")
+    {
+
+    }
+
+
     // H264 stream from socket or stdin
     H264StreamSource m_h264source;
     // CUDA video reader input
@@ -53,10 +60,14 @@ public:
 
     // Rectified buffers
     cv::gpu::GpuMat m_gCurrentFrameGrayRectified;
+    cv::gpu::GpuMat m_gCurrentFrameRectified;
 
     VideoStream(SourceType source, std::string fname);
 
+    void init(SourceType source, std::string fname);
+
     bool readLatestFrame();
+    bool readOnlyOneLatestFrame();
 
     bool rectifyCurrentFrame();
 
